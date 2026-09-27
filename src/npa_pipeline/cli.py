@@ -7,10 +7,13 @@ import json
 import sys
 from pathlib import Path
 
+from npa_pipeline import burondt
 from npa_pipeline.authorities import AuthorityCache
 from npa_pipeline.db import DEFAULT_DB_PATH, DocumentStore
 from npa_pipeline.http_client import create_client
 from npa_pipeline.import_json import import_json_sidecars
+from npa_pipeline.its import ItsCache
+from npa_pipeline.its_download import fetch_its
 from npa_pipeline.models import Query, parse_user_date
 from npa_pipeline.service import fetch_document
 
@@ -57,6 +60,33 @@ def cmd_refresh_authorities(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refresh_its(args: argparse.Namespace) -> int:
+    cache = ItsCache(args.db)
+    with burondt.create_burondt_client() as client:
+        stats = cache.refresh(
+            client,
+            full_rescan=args.full_rescan,
+            max_requests=args.max_requests,
+            confirm_empty_run=args.confirm_empty_run,
+        )
+    print(json.dumps({"db": str(Path(args.db)), **stats}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_fetch_its(args: argparse.Namespace) -> int:
+    cache = ItsCache(args.db)
+    with burondt.create_burondt_client() as client:
+        result = fetch_its(
+            client,
+            designation=args.designation,
+            out_dir=Path(args.out_dir),
+            cache=cache,
+            download=not args.no_download,
+        )
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if result.status.value == "found" else 1
+
+
 def cmd_import_json(args: argparse.Namespace) -> int:
     store = DocumentStore(args.db)
     stats = import_json_sidecars(
@@ -95,6 +125,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh = sub.add_parser("refresh-authorities", help="Обновить справочник органов")
     refresh.set_defaults(func=cmd_refresh_authorities)
+
+    refresh_its = sub.add_parser("refresh-its", help="Обновить кэш карточек ИТС/НДТ с burondt.ru")
+    refresh_its.add_argument(
+        "--full-rescan",
+        action="store_true",
+        help="Полный обход с UrlId=10, а не только новые id",
+    )
+    refresh_its.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Ограничить число запросов за запуск (для чанкования)",
+    )
+    refresh_its.add_argument(
+        "--confirm-empty-run",
+        type=int,
+        default=40,
+        help="Сколько пустых id подряд считать концом диапазона",
+    )
+    refresh_its.set_defaults(func=cmd_refresh_its)
+
+    fetch_its_cmd = sub.add_parser(
+        "fetch-its",
+        help="Скачать файлы ИТС по обозначению, году или номеру без года (ИТС 28-2021 / 2021 / ИТС 53)",
+    )
+    fetch_its_cmd.add_argument(
+        "designation",
+        help=(
+            "Обозначение (ИТС 28-2021), просто год (2021) или номер без года (ИТС 53) — "
+            "в двух последних случаях вернутся все версии, новые сначала"
+        ),
+    )
+    fetch_its_cmd.add_argument("--out-dir", default="downloads/its", help="Каталог для PDF")
+    fetch_its_cmd.add_argument(
+        "--no-download",
+        action="store_true",
+        help="Только резолвинг в кэше, без скачивания",
+    )
+    fetch_its_cmd.set_defaults(func=cmd_fetch_its)
 
     imp = sub.add_parser(
         "import-json",

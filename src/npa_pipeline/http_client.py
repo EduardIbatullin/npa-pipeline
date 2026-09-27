@@ -1,4 +1,5 @@
-"""HTTP-клиент к publication.pravo.gov.ru: retry/backoff для JSON и скачивания PDF."""
+"""HTTP-клиент с общими retry/backoff (base_url настраивается — используется и для
+publication.pravo.gov.ru, и для burondt.ru)."""
 
 from __future__ import annotations
 
@@ -13,10 +14,13 @@ BASE_URL = "http://publication.pravo.gov.ru"
 JSON_TIMEOUT = httpx.Timeout(30.0, connect=15.0)
 PDF_TIMEOUT = httpx.Timeout(180.0, connect=15.0)
 
-RETRY_STATUSES = {500, 502, 503, 504}
+# 429 добавлен ради burondt.ru (устойчивость на полном объёме ~2550 запросов не проверена;
+# для publication.pravo.gov.ru не мешает — там 429 не наблюдался)
+RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
 BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 PAGE_PAUSE_SECONDS = 0.35
+BURONDT_PAGE_PAUSE_SECONDS = 0.5  # чуть консервативнее — устойчивость burondt.ru не проверена
 
 
 class NetworkError(Exception):
@@ -27,10 +31,14 @@ class NetworkError(Exception):
         self.cause = cause
 
 
-def create_client(*, transport: httpx.BaseTransport | None = None) -> httpx.Client:
-    """Создаёт синхронный httpx.Client (можно подменить transport для тестов)."""
+def create_client(
+    *,
+    transport: httpx.BaseTransport | None = None,
+    base_url: str = BASE_URL,
+) -> httpx.Client:
+    """Создаёт синхронный httpx.Client (можно подменить transport для тестов и base_url для другого хоста)."""
     kwargs: dict[str, Any] = {
-        "base_url": BASE_URL,
+        "base_url": base_url,
         "timeout": JSON_TIMEOUT,
         "follow_redirects": True,
         "headers": {"Accept": "text/html, application/json, */*"},
@@ -68,13 +76,41 @@ def request_json(
     raise NetworkError(f"Запрос {method} {path} не удался после {MAX_ATTEMPTS} попыток", cause=last_exc)
 
 
+def request_text(
+    client: httpx.Client,
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+) -> str:
+    """GET/POST текст (HTML) с тем же retry, что request_json."""
+    last_exc: Exception | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            response = client.request(method, path, params=params, timeout=JSON_TIMEOUT)
+            if response.status_code in RETRY_STATUSES:
+                raise httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+            response.raise_for_status()
+            return response.text
+        except (httpx.TransportError, httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+            last_exc = exc
+            if attempt + 1 >= MAX_ATTEMPTS:
+                break
+            time.sleep(BACKOFF_SECONDS[attempt])
+    raise NetworkError(f"Запрос {method} {path} не удался после {MAX_ATTEMPTS} попыток", cause=last_exc)
+
+
 def download_bytes(
     client: httpx.Client,
     path: str,
     *,
     params: dict[str, Any] | None = None,
-) -> tuple[bytes, int | None]:
-    """Скачивает тело ответа потоком; возвращает (данные, Content-Length или None)."""
+) -> tuple[bytes, int | None, httpx.Headers]:
+    """Скачивает тело ответа потоком; возвращает (данные, Content-Length или None, заголовки ответа)."""
     last_exc: Exception | None = None
     for attempt in range(MAX_ATTEMPTS):
         try:
@@ -93,7 +129,7 @@ def download_bytes(
                 chunks: list[bytes] = []
                 for chunk in response.iter_bytes():
                     chunks.append(chunk)
-                return b"".join(chunks), content_length
+                return b"".join(chunks), content_length, response.headers
         except (httpx.TransportError, httpx.HTTPStatusError, httpx.TimeoutException) as exc:
             last_exc = exc
             if attempt + 1 >= MAX_ATTEMPTS:

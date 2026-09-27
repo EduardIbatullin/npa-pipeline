@@ -115,6 +115,53 @@ class Result:
         }
 
 
+@dataclass
+class ItsFileResult:
+    """Один скачанный/найденный файл карточки ИТС (справочник или приказ)."""
+
+    role: str  # "document" | "order" | "unknown"
+    file_id: int
+    pdf_path: str | None = None
+    pages: int | None = None
+    order_number_caption: str | None = None
+    order_date_caption: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "file_id": self.file_id,
+            "pdf_path": self.pdf_path,
+            "pages": self.pages,
+            # Явная пометка: подпись карточки не авторитетна (подтверждённая опечатка
+            # на реальном примере — карточка «№835», реальный скан «№2326»).
+            "order_number_caption": self.order_number_caption,
+            "order_date_caption": self.order_date_caption,
+            "order_meta_verified": False,
+        }
+
+
+@dataclass
+class ItsResult:
+    """Контракт результата для скачивания ИТС/НДТ (этап 1, расширение burondt.ru)."""
+
+    status: Status
+    designation: str | None = None
+    url_id: int | None = None
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    files: list[ItsFileResult] = field(default_factory=list)
+    message: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "designation": self.designation,
+            "url_id": self.url_id,
+            "candidates": list(self.candidates),
+            "files": [f.to_dict() for f in self.files],
+            "message": self.message,
+        }
+
+
 def parse_api_date(value: str | None) -> date | None:
     """Парсит documentDate вида 2023-04-25T00:00:00."""
     if not value:

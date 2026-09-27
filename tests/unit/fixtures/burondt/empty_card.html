@@ -1,0 +1,198 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title> - НАИЛУЧШИЕ ДОСТУПНЫЕ ТЕХНОЛОГИИ</title>
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+<link rel="shortcut icon" type="image/x-icon" href="/../images/favicon.ico" />
+<link href="/../smarty/ru/css/templates.css" rel="stylesheet" type="text/css" />
+
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/css/jqueryui/redmond/jquery-ui-1.10.3.custom.min.css" />
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/css/jqueryui/jquery.ui.menubar.css" />
+<script type="text/javascript" src="../libs/jquery/js/jquery-1.9.1.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/js/jquery-ui-1.10.3.custom.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/js/jquery.ui.menubar.js"></script>
+<script type="text/javascript" src="/../libs/jquery/js/jquery.validate.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/form/jquery.form.min.js"></script>
+
+<script type="text/javascript" src="/../libs/jquery/js/jquery.datepick-ru.js"></script>
+
+<script type="text/javascript" src="/../libs/jquery/jsTree/_lib/jquery.cookie.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jsTree/_lib/jquery.hotkeys.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jsTree/jquery.jstree.min.js"></script>
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/jsTree/themes/default/style.css" />
+
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/jqGrid/plugins/ui.multiselect.css" />
+<script type="text/javascript" src="../libs/jquery/jqGrid/plugins/ui.multiselect.js"></script>
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/jqGrid/css/ui.jqgrid.css" />
+
+<script type="text/javascript" src="/../libs/jquery/jqGrid/js/i18n/grid.locale-ru.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqGrid/js/jquery.jqGrid.min.js"></script>
+
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/jqGridToolbarButtonAdd/css/ui.jqGridToolbarButtonAdd.css" />
+<script type="text/javascript" src="/../libs/jquery/jqGridToolbarButtonAdd/js/jqGridToolbarButtonAdd.src.js"></script>
+<link rel="stylesheet" type="text/css" href='/../libs/jquery/fullcalendar/fullcalendar.css' />
+<link rel="stylesheet" type="text/css" href='/../libs/jquery/fullcalendar/fullcalendar.print.css' media='print' />
+<script type="text/javascript" src='/../libs/jquery/fullcalendar/lib/moment.min.js'></script>
+<script type="text/javascript" src='/../libs/jquery/fullcalendar/fullcalendar.min.js'></script>
+<script type="text/javascript" src='/../libs/jquery/fullcalendar/lang/ru.js'></script>
+<link href="../libs/jquery/jquery.fileapi-master/statics/main.css" rel="stylesheet" type="text/css"/>
+<link href="../libs/jquery/jquery.fileapi-master/jcrop/jquery.Jcrop.min.css" rel="stylesheet" type="text/css"/>
+<script type="text/javascript" src="/../libs/site/js/javascript.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/js/jquery.jqplot.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.barRenderer.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/js/excanvas.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.categoryAxisRenderer.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.canvasAxisLabelRenderer.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.canvasAxisTickRenderer.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.pointLabels.min.js"></script>
+<script type="text/javascript" src="/../libs/jquery/jqPlot/plugins/jqplot.json2.min.js"></script>
+<link rel="stylesheet" type="text/css" href="/../libs/jquery/jqPlot/css/jquery.jqplot.css" />
+
+
+<style type="text/css">
+  .ui-autocomplete-loading { 
+    background: white url(../images/loading.gif) right center no-repeat; 
+  }
+  
+  .ui-autocomplete-category {
+		font-weight: bold;
+		padding: .2em .4em;
+		margin: .8em 0 .2em;
+		line-height: 1.5;
+	}
+</style>
+
+
+</head>
+
+<body class="ui-widget-content">
+  
+  
+  
+  
+  <table class="MenuLang">
+  <tr>
+    <td>Available Languages:&nbsp;</td>
+      <td>
+              <span>RU</span> |
+          </td>
+        <td>
+              <a class="ui-state-default" href="/NDT/NDTDocsDetail.php?UrlId=2650&UrlLang=en" title="English version" target="_self">EN</a>
+          </td>
+    </tr>
+</table>
+<div style="clear: both;"></div>
+    
+
+
+
+
+  
+  
+
+<div class="ui-widget-content ui-corner-all"> 
+      
+  
+  <h1 style="padding-left: 20px;"></h1>
+  
+  <div style="padding-left:2px;padding-right:2px;padding-bottom:2px;">
+    
+
+<script type="text/javascript">
+//<![CDATA[
+  $(function() {
+    tableToGrid("#TableFormView",{height:'100%'});
+    $("#gbox_TableFormView .ui-jqgrid-hdiv").hide(); 
+    UpdateJqGrid("TableFormView","Detail", true);
+  });
+  
+  $(function() {
+		$("#ButtonWindowClose").button({
+      icons: {
+        primary: "ui-icon-closethick"
+      }
+    }).click(function() {window.close();});
+	});
+  
+//]]>
+</script>
+
+
+<h3><span id="DetailTnpaOnd"></span> <span id="DetailTnpaNnd"></span></h3>
+
+<div class="ui-widget-content ui-corner-all">
+  <div id="Detail" style="padding:10px;">
+    <h2>&darr;</h2>
+    <table id="TableFormView">
+        <thead>
+          <tr>
+            <th id="name" width="200px"></th>
+            <th id="text"></th>
+          </tr>
+        </thead>
+        <tbody>
+      <tr>
+        <td><label>Обозначение</label></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><label>Наименование</label></td>
+        <td></td>
+      </tr>
+            
+      <tr>
+        <td><label>Файлы:</label></td>
+        <td></td>
+      </tr>
+      
+      </tbody>
+    </table>
+    <br />
+  </div>
+</div>
+    
+    
+    <div style="float: left;">
+      <br />
+      <br />
+      <br />
+      
+    </div>
+    
+    <div style="margin-left: 770px;">
+      
+      
+      
+      
+    </div>
+    
+    <div class="MsClearFloat"></div>
+  </div>
+</div>
+
+
+<div class="MsCopyRight">© БелГИСС, 2011-2026</div>
+<div id="DialogMessage" style="display:none;">
+	<p><span style="float:left; margin:0 7px 7px 0;"></span><span id="DialogMessageText">Сообщение!</span></p>
+</div>
+<div id="DialogConfirmMessage" style="display:none;">
+	<p><span style="float:left; margin:0 7px 7px 0;"></span><span id="DialogConfirmMessageText">Сообщение!</span></p>
+</div>
+<div id="MessageLoading" style="display:none;">
+	<p><span style="float:left; margin:0 7px 7px 0;"></span><img width="16" height="16" title="Дождитесь выполнения действия!" alt="Дождитесь выполнения действия!" src="../images/loading.gif" /> Дождитесь выполнения действия!</p>
+</div>
+<div class="popupmessage-container popupmessage-position-bottom-right">&nbsp;</div>
+
+
+<script type="text/javascript">
+$(function(){
+$(".popupmessage-container").on('click', '.popupmessage-content', function () {
+    $(this).remove();
+});
+});
+</script>
+
+</body>
+</html>

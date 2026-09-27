@@ -90,6 +90,45 @@ CREATE TABLE IF NOT EXISTS document_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_document_relations_source ON document_relations(source_eo);
 CREATE INDEX IF NOT EXISTS idx_document_relations_target ON document_relations(target_eo);
+
+CREATE TABLE IF NOT EXISTS its_documents (
+    url_id            INTEGER PRIMARY KEY,
+    designation       TEXT NOT NULL,
+    designation_norm  TEXT NOT NULL,
+    title             TEXT,
+    raw_card_html     TEXT,
+    first_seen_at     TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_its_documents_designation_norm ON its_documents(designation_norm);
+
+CREATE TABLE IF NOT EXISTS its_files (
+    file_id               INTEGER PRIMARY KEY,
+    url_id                INTEGER NOT NULL,
+    role                  TEXT NOT NULL,
+    caption               TEXT,
+    order_number_caption  TEXT,
+    order_date_caption    TEXT,
+    updated_at            TEXT NOT NULL,
+    FOREIGN KEY (url_id) REFERENCES its_documents(url_id)
+);
+CREATE INDEX IF NOT EXISTS idx_its_files_url_id ON its_files(url_id);
+
+CREATE TABLE IF NOT EXISTS its_document_files (
+    file_id       INTEGER PRIMARY KEY,
+    file_path     TEXT NOT NULL,
+    sha256        TEXT NOT NULL,
+    size_bytes    INTEGER NOT NULL,
+    pages         INTEGER,
+    downloaded_at TEXT NOT NULL,
+    verified_at   TEXT,
+    FOREIGN KEY (file_id) REFERENCES its_files(file_id)
+);
+
+CREATE TABLE IF NOT EXISTS its_crawl_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 

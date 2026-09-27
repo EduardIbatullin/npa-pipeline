@@ -1,0 +1,213 @@
+"""Обёртка burondt.ru: карточки ИТС/НДТ (NDTDocsDetail.php) и скачивание файлов
+(NDTDocsFileDownload.php). Без обращений к БД — как api.py для publication.pravo.gov.ru.
+
+ИТС/НДТ не проходят через publication.pravo.gov.ru вообще, поэтому это отдельный источник
+со своим методом. На burondt.ru нет резолвинга по реквизитам — карточки лежат по
+последовательным числовым UrlId в диапазоне, общем с ГОСТами и административными
+документами технических рабочих групп, поэтому единственный способ найти ИТС — обойти
+диапазон целиком и отфильтровать по полю «Обозначение» (обязательно, иначе в кэш попадёт
+посторонний ГОСТ/протокол). Диапазон продолжает пополняться со временем (подтверждено
+эмпирически), поэтому верхняя граница нигде не хардкодится константой — определяется
+каждый раз заново обходом с длинной пустой серией (find_upper_bound/iter_cards).
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+
+import httpx
+
+from npa_pipeline.http_client import (
+    BURONDT_PAGE_PAUSE_SECONDS,
+    create_client,
+    download_bytes,
+    request_text,
+)
+
+BURONDT_BASE_URL = "https://burondt.ru"
+CARD_PATH = "/NDT/NDTDocsDetail.php"
+FILE_PATH = "/NDT/NDTDocsFileDownload.php"
+ITS_PREFIX = "ИТС"
+
+_DESIGNATION_RE = re.compile(
+    r"<label>\s*Обозначение\s*</label>\s*</td>\s*<td>([^<]*)</td>", re.IGNORECASE
+)
+_TITLE_RE = re.compile(
+    r"<label>\s*Наименование\s*</label>\s*</td>\s*<td>([^<]*)</td>", re.IGNORECASE
+)
+_FILES_ROW_RE = re.compile(
+    r"<label>\s*Файлы:?\s*</label>\s*</td>\s*<td>(.*?)</td>\s*</tr>",
+    re.IGNORECASE | re.DOTALL,
+)
+_FILE_ITEM_RE = re.compile(
+    r"<li>(.*?)<a[^>]*href=\"[^\"]*UrlId=(\d+)\"[^>]*>([^<]*)</a>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+_ORDER_WORD_RE = re.compile(r"приказ", re.IGNORECASE)
+_ORDER_NUMBER_RE = re.compile(r"№\s*(\d+)")
+_ORDER_DATE_RE = re.compile(
+    r"(\d{1,2}\s+[а-яА-Я]+\s+\d{4}|\d{2}\.\d{2}\.\d{4})"
+)
+_CONTENT_DISPOSITION_FILENAME_RE = re.compile(r'filename="?([^";]+)"?')
+
+
+@dataclass
+class ItsCardFile:
+    file_id: int
+    caption: str
+    role: str  # "document" | "order" | "unknown"
+
+
+@dataclass
+class ItsCard:
+    url_id: int
+    designation: str
+    title: str | None = None
+    files: list[ItsCardFile] = field(default_factory=list)
+
+
+def create_burondt_client(*, transport: httpx.BaseTransport | None = None) -> httpx.Client:
+    """Клиент к burondt.ru — тот же create_client, другой base_url."""
+    return create_client(base_url=BURONDT_BASE_URL, transport=transport)
+
+
+def fetch_card_html(client: httpx.Client, url_id: int) -> str:
+    """GET NDTDocsDetail.php?UrlId=<url_id> — сырой HTML карточки."""
+    return request_text(client, "GET", CARD_PATH, params={"UrlId": url_id})
+
+
+def _strip_tags(text: str) -> str:
+    return _TAG_RE.sub("", text).replace("&nbsp;", " ").strip()
+
+
+def _classify_role(caption: str) -> str:
+    """'order', если в подписи есть слово «приказ» (регистронезависимо), иначе 'document'."""
+    return "order" if _ORDER_WORD_RE.search(caption) else "document"
+
+
+def extract_order_meta(caption: str) -> tuple[str | None, str | None]:
+    """Best-effort извлечение № и даты приказа из текста подписи.
+
+    НЕ авторитетный источник — подпись карточки может содержать опечатку
+    (подтверждено: карточка ИТС 28-2021 называла приказ «№835», реальный
+    скан — «№2326»). Использовать только как order_*_caption, не как
+    проверенную цитату.
+    """
+    number_m = _ORDER_NUMBER_RE.search(caption)
+    date_m = _ORDER_DATE_RE.search(caption)
+    return (
+        number_m.group(1) if number_m else None,
+        date_m.group(1) if date_m else None,
+    )
+
+
+def parse_card(html: str, url_id: int) -> ItsCard | None:
+    """Разбирает карточку NDTDocsDetail.php. None — пустой слот (пропуск в диапазоне)."""
+    designation_m = _DESIGNATION_RE.search(html)
+    designation = designation_m.group(1).strip() if designation_m else ""
+    if not designation:
+        return None
+
+    title_m = _TITLE_RE.search(html)
+    title = title_m.group(1).strip() if title_m and title_m.group(1).strip() else None
+
+    files: list[ItsCardFile] = []
+    files_m = _FILES_ROW_RE.search(html)
+    if files_m:
+        for item_m in _FILE_ITEM_RE.finditer(files_m.group(1)):
+            caption_prefix = _strip_tags(item_m.group(1))
+            filename = item_m.group(3).strip()
+            caption = caption_prefix or filename
+            files.append(
+                ItsCardFile(
+                    file_id=int(item_m.group(2)),
+                    caption=caption,
+                    role=_classify_role(caption),
+                )
+            )
+
+    return ItsCard(url_id=url_id, designation=designation, title=title, files=files)
+
+
+def is_its(card: ItsCard) -> bool:
+    """Обязательный фильтр — диапазон общий с ГОСТами/протоколами ТРГ."""
+    return card.designation.strip().upper().startswith(ITS_PREFIX)
+
+
+def resolve_ambiguous_roles(
+    files_with_bytes: list[tuple[ItsCardFile, bytes]]
+) -> list[ItsCardFile]:
+    """Фолбэк, если по подписи роль не распознана: крупнейший файл — документ, меньшие — приказ.
+
+    На практике подпись почти всегда содержит «приказ» — этот путь для редких случаев,
+    когда _classify_role не сработал (например, нестандартная подпись).
+    """
+    if len(files_with_bytes) < 2:
+        return [f for f, _ in files_with_bytes]
+    ordered = sorted(files_with_bytes, key=lambda pair: len(pair[1]), reverse=True)
+    result: list[ItsCardFile] = []
+    for i, (f, _data) in enumerate(ordered):
+        role = "document" if i == 0 else "order"
+        result.append(ItsCardFile(file_id=f.file_id, caption=f.caption, role=role))
+    return result
+
+
+def download_file(client: httpx.Client, file_id: int) -> tuple[bytes, int | None, str | None]:
+    """GET NDTDocsFileDownload.php?UrlId=<file_id> — (bytes, Content-Length, имя файла)."""
+    data, content_length, headers = download_bytes(client, FILE_PATH, params={"UrlId": file_id})
+    filename = None
+    disposition = headers.get("Content-Disposition") if headers else None
+    if disposition:
+        m = _CONTENT_DISPOSITION_FILENAME_RE.search(disposition)
+        if m:
+            filename = m.group(1).strip()
+    return data, content_length, filename
+
+
+def find_upper_bound(
+    client: httpx.Client,
+    *,
+    from_url_id: int,
+    confirm_empty_run: int = 40,
+    max_probe: int = 20_000,
+    pause_seconds: float = BURONDT_PAGE_PAUSE_SECONDS,
+) -> int:
+    """Идёт вперёд от from_url_id, пока не встретит confirm_empty_run пустых карточек
+    подряд; возвращает последний непустой url_id. Не хардкодит границу."""
+    empty_run = 0
+    last_non_empty = from_url_id - 1
+    url_id = from_url_id
+    while empty_run < confirm_empty_run and url_id < from_url_id + max_probe:
+        html = fetch_card_html(client, url_id)
+        if pause_seconds:
+            time.sleep(pause_seconds)
+        card = parse_card(html, url_id)
+        if card is None:
+            empty_run += 1
+        else:
+            empty_run = 0
+            last_non_empty = url_id
+        url_id += 1
+    return last_non_empty
+
+
+def iter_cards(
+    client: httpx.Client,
+    *,
+    lo: int,
+    hi: int,
+    pause_seconds: float = BURONDT_PAGE_PAUSE_SECONDS,
+) -> Iterator[tuple[int, ItsCard | None]]:
+    """Построчный обход [lo, hi] включительно, с паузой между запросами.
+
+    Единичные пропуски встречаются внутри диапазона — обход построчный, не с шагом.
+    """
+    for url_id in range(lo, hi + 1):
+        html = fetch_card_html(client, url_id)
+        if pause_seconds:
+            time.sleep(pause_seconds)
+        yield url_id, parse_card(html, url_id)

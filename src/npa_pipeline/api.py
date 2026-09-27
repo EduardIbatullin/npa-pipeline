@@ -121,7 +121,7 @@ def list_signatory_authorities(client: httpx.Client) -> list[dict[str, Any]]:
 
 def download_pdf(client: httpx.Client, eo_number: str) -> tuple[bytes, int | None]:
     """Скачивает PDF: возвращает (bytes, Content-Length или None)."""
-    data, content_length = download_bytes(client, "/file/pdf", params={"eoNumber": eo_number})
+    data, content_length, _headers = download_bytes(client, "/file/pdf", params={"eoNumber": eo_number})
     return data, content_length
 
 
