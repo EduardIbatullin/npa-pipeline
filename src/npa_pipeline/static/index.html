@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NPA Pipeline — проверка</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Этап 1</p>
+        <h1>NPA Pipeline</h1>
+        <p class="lede">Поиск и скачивание официальных PDF: НПА (publication.pravo.gov.ru) и справочники ИТС/НДТ (burondt.ru)</p>
+      </div>
+      <div class="header-status">
+        <div class="status-box" id="health">
+          <span class="dot"></span>
+          <span id="health-text">проверка…</span>
+        </div>
+        <button type="button" class="btn" id="btn-refresh-cache">Обновить кэш органов</button>
+        <div class="progress" id="cache-progress" hidden>
+          <div class="progress-bar" id="cache-progress-bar"></div>
+        </div>
+        <span class="hint" id="cache-progress-text" hidden></span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>Запрос</h2>
+
+        <div class="doc-type" id="doc-type" role="radiogroup" aria-label="Тип документа">
+          <label class="doc-type-opt">
+            <input type="radio" name="doc_type" value="npa" id="doc-type-npa" checked />
+            <span>НПА (publication.pravo.gov.ru)</span>
+          </label>
+          <label class="doc-type-opt">
+            <input type="radio" name="doc_type" value="its" id="doc-type-its" />
+            <span>ИТС/НДТ (burondt.ru)</span>
+          </label>
+        </div>
+
+        <div id="npa-fields">
+          <form id="fetch-form" class="form">
+            <label class="ac-wrap">
+              Название органа
+              <input
+                name="authority_name"
+                id="authority_name"
+                placeholder="Начните вводить: Минфин, Президент…"
+                autocomplete="off"
+                aria-autocomplete="list"
+                aria-controls="authority-suggest"
+              />
+              <ul id="authority-suggest" class="ac-list" role="listbox" hidden></ul>
+            </label>
+            <input type="hidden" name="authority_guid" id="authority_guid" />
+
+            <div class="row">
+              <label>
+                Номер документа
+                <input name="number" id="number" placeholder="310-ФЗ" />
+              </label>
+              <label>
+                Дата подписания
+                <input name="date" id="date" type="date" />
+              </label>
+            </div>
+
+            <label class="check">
+              <input type="checkbox" name="download" id="download" checked />
+              Скачать PDF при успехе
+            </label>
+
+            <div class="actions">
+              <button type="submit" class="btn primary" id="btn-fetch">Найти</button>
+              <button type="button" class="btn" id="btn-resolve">Резолвить орган</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="its-fields" hidden>
+          <form id="its-form" class="form">
+            <label>
+              Обозначение <span class="hint">год или номер без года — покажет все версии, новые сначала</span>
+              <input name="its_designation" id="its_designation" placeholder="ИТС 28-2021, или 2021, или ИТС 53" autocomplete="off" />
+            </label>
+            <div class="actions">
+              <button type="submit" class="btn primary" id="btn-its-fetch">Найти</button>
+            </div>
+          </form>
+
+          <p class="hint">
+            Поиск ищет только среди уже просканированных карточек. Если кэш заполнен не полностью,
+            часть реально существующих ИТС не найдётся — см. кнопку обновления кэша наверху страницы.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Результат</h2>
+        <div id="result" class="result empty">Заполните форму и нажмите «Найти».</div>
+        <div id="its-result" class="result empty" hidden>Введите обозначение и нажмите «Найти».</div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
