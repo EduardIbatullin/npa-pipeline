@@ -1,0 +1,406 @@
+"""Единая SQLite-база проекта: органы, документы, файлы, связи."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from npa_pipeline.models import DocItem, parse_api_date, utc_now_iso
+from npa_pipeline.normalize import normalize_number
+
+DEFAULT_DB_PATH = Path("data/npa.db")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS authorities (
+    guid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_norm TEXT NOT NULL,
+    block TEXT,
+    category TEXT,
+    updated_at TEXT NOT NULL,
+    weight INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_authorities_name_norm ON authorities(name_norm);
+
+CREATE TABLE IF NOT EXISTS document_types (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    weight INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+    eo_number TEXT PRIMARY KEY,
+    portal_id TEXT,
+    number TEXT NOT NULL,
+    number_norm TEXT NOT NULL,
+    document_date TEXT NOT NULL,
+    publish_date TEXT,
+    doc_type_id TEXT,
+    name TEXT,
+    complex_name TEXT,
+    title TEXT,
+    jd_reg_number TEXT,
+    jd_reg_date TEXT,
+    pages_count INTEGER,
+    pdf_file_length INTEGER,
+    raw_card_json TEXT,
+    first_seen_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (doc_type_id) REFERENCES document_types(id)
+);
+CREATE INDEX IF NOT EXISTS idx_documents_number_norm ON documents(number_norm);
+CREATE INDEX IF NOT EXISTS idx_documents_document_date ON documents(document_date);
+
+CREATE TABLE IF NOT EXISTS document_signatories (
+    eo_number TEXT NOT NULL,
+    authority_guid TEXT NOT NULL,
+    is_main INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (eo_number, authority_guid),
+    FOREIGN KEY (eo_number) REFERENCES documents(eo_number)
+);
+CREATE INDEX IF NOT EXISTS idx_document_signatories_authority
+    ON document_signatories(authority_guid);
+
+CREATE TABLE IF NOT EXISTS document_files (
+    eo_number TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    pages INTEGER,
+    downloaded_at TEXT NOT NULL,
+    verified_at TEXT,
+    FOREIGN KEY (eo_number) REFERENCES documents(eo_number)
+);
+
+CREATE TABLE IF NOT EXISTS document_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_eo TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    target_eo TEXT,
+    target_ref_text TEXT,
+    effective_date TEXT,
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (source_eo) REFERENCES documents(eo_number),
+    FOREIGN KEY (target_eo) REFERENCES documents(eo_number)
+);
+CREATE INDEX IF NOT EXISTS idx_document_relations_source ON document_relations(source_eo);
+CREATE INDEX IF NOT EXISTS idx_document_relations_target ON document_relations(target_eo);
+"""
+
+
+@dataclass
+class FileRecord:
+    eo_number: str
+    file_path: str
+    sha256: str
+    size_bytes: int
+    pages: int | None
+    downloaded_at: str
+    verified_at: str | None = None
+
+
+def resolve_db_path(db_path: str | Path = DEFAULT_DB_PATH) -> Path:
+    """Путь к БД; при первом запуске копирует старый authorities.db → npa.db."""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() and path.name == "npa.db":
+        legacy = path.parent / "authorities.db"
+        if legacy.exists():
+            shutil.copy2(legacy, path)
+    return path
+
+
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    path = resolve_db_path(db_path)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(authorities)")}
+    if "weight" not in cols:
+        conn.execute("ALTER TABLE authorities ADD COLUMN weight INTEGER")
+    conn.commit()
+
+
+class DocumentStore:
+    """Запись и чтение документов / файлов в единой БД."""
+
+    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
+        self.db_path = resolve_db_path(db_path)
+        with self._connect() as conn:
+            init_schema(conn)
+
+    def _connect(self) -> sqlite3.Connection:
+        return connect(self.db_path)
+
+    def upsert_from_card(self, card: dict[str, Any]) -> str:
+        """Сохраняет полную карточку /api/Document. Возвращает eoNumber."""
+        eo = card["eoNumber"]
+        now = utc_now_iso()
+        doc_date = parse_api_date(card.get("documentDate"))
+        if doc_date is None:
+            raise ValueError(f"Нет documentDate в карточке {eo}")
+
+        number = card.get("number") or ""
+        publish = parse_api_date(card.get("publishDateShort"))
+        jd_reg = parse_api_date(card.get("jdRegDate"))
+
+        doc_type = card.get("documentType") or {}
+        doc_type_id = card.get("documentTypeId") or doc_type.get("id")
+        doc_type_name = doc_type.get("name")
+        doc_type_weight = doc_type.get("weight")
+
+        with self._connect() as conn:
+            if doc_type_id and doc_type_name:
+                conn.execute(
+                    """
+                    INSERT INTO document_types (id, name, weight)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name,
+                        weight = excluded.weight
+                    """,
+                    (doc_type_id, doc_type_name, doc_type_weight),
+                )
+
+            existing = conn.execute(
+                "SELECT first_seen_at FROM documents WHERE eo_number = ?",
+                (eo,),
+            ).fetchone()
+            first_seen = existing["first_seen_at"] if existing else now
+
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    eo_number, portal_id, number, number_norm, document_date, publish_date,
+                    doc_type_id, name, complex_name, title, jd_reg_number, jd_reg_date,
+                    pages_count, pdf_file_length, raw_card_json, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(eo_number) DO UPDATE SET
+                    portal_id = excluded.portal_id,
+                    number = excluded.number,
+                    number_norm = excluded.number_norm,
+                    document_date = excluded.document_date,
+                    publish_date = excluded.publish_date,
+                    doc_type_id = excluded.doc_type_id,
+                    name = excluded.name,
+                    complex_name = excluded.complex_name,
+                    title = excluded.title,
+                    jd_reg_number = excluded.jd_reg_number,
+                    jd_reg_date = excluded.jd_reg_date,
+                    pages_count = excluded.pages_count,
+                    pdf_file_length = excluded.pdf_file_length,
+                    raw_card_json = excluded.raw_card_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    eo,
+                    card.get("id"),
+                    number,
+                    normalize_number(number),
+                    doc_date.isoformat(),
+                    publish.isoformat() if publish else None,
+                    doc_type_id,
+                    card.get("name"),
+                    card.get("complexName"),
+                    card.get("title"),
+                    card.get("jdRegNumber"),
+                    jd_reg.isoformat() if jd_reg else None,
+                    card.get("pagesCount"),
+                    card.get("pdfFileLength"),
+                    json.dumps(card, ensure_ascii=False),
+                    first_seen,
+                    now,
+                ),
+            )
+
+            conn.execute(
+                "DELETE FROM document_signatories WHERE eo_number = ?",
+                (eo,),
+            )
+            authorities = card.get("signatoryAuthorities") or []
+            if authorities:
+                for auth in authorities:
+                    guid = auth.get("id")
+                    if not guid:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO document_signatories (eo_number, authority_guid, is_main)
+                        VALUES (?, ?, ?)
+                        """,
+                        (eo, guid, 1 if auth.get("isMain") else 0),
+                    )
+            else:
+                sid = card.get("signatoryAuthorityId")
+                if sid:
+                    conn.execute(
+                        """
+                        INSERT INTO document_signatories (eo_number, authority_guid, is_main)
+                        VALUES (?, ?, 1)
+                        """,
+                        (eo, sid),
+                    )
+            conn.commit()
+        return eo
+
+    def upsert_from_doc_item(self, document: DocItem) -> str:
+        """Минимальная запись без полной карточки (импорт старых JSON)."""
+        now = utc_now_iso()
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT first_seen_at, raw_card_json FROM documents WHERE eo_number = ?",
+                (document.eo_number,),
+            ).fetchone()
+            if existing and existing["raw_card_json"]:
+                # Полная карточка уже есть — не затираем урезанными данными
+                return document.eo_number
+
+            first_seen = existing["first_seen_at"] if existing else now
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    eo_number, portal_id, number, number_norm, document_date, publish_date,
+                    doc_type_id, name, complex_name, title, jd_reg_number, jd_reg_date,
+                    pages_count, pdf_file_length, raw_card_json, first_seen_at, updated_at
+                ) VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, ?, ?)
+                ON CONFLICT(eo_number) DO UPDATE SET
+                    number = excluded.number,
+                    number_norm = excluded.number_norm,
+                    document_date = excluded.document_date,
+                    doc_type_id = COALESCE(excluded.doc_type_id, documents.doc_type_id),
+                    name = COALESCE(excluded.name, documents.name),
+                    complex_name = COALESCE(excluded.complex_name, documents.complex_name),
+                    pdf_file_length = COALESCE(excluded.pdf_file_length, documents.pdf_file_length),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    document.eo_number,
+                    document.number,
+                    normalize_number(document.number),
+                    document.document_date.isoformat(),
+                    document.document_type_id,
+                    document.name,
+                    document.complex_name,
+                    document.pdf_file_length,
+                    first_seen,
+                    now,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM document_signatories WHERE eo_number = ?",
+                (document.eo_number,),
+            )
+            for i, sid in enumerate(document.signatory_ids):
+                conn.execute(
+                    """
+                    INSERT INTO document_signatories (eo_number, authority_guid, is_main)
+                    VALUES (?, ?, ?)
+                    """,
+                    (document.eo_number, sid, 1 if i == 0 else 0),
+                )
+            conn.commit()
+        return document.eo_number
+
+    def record_file(
+        self,
+        *,
+        eo_number: str,
+        file_path: str | Path,
+        sha256: str,
+        size_bytes: int,
+        pages: int | None,
+    ) -> FileRecord:
+        now = utc_now_iso()
+        path_str = str(file_path)
+        with self._connect() as conn:
+            # документ должен существовать (FK)
+            exists = conn.execute(
+                "SELECT 1 FROM documents WHERE eo_number = ?",
+                (eo_number,),
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"Документ {eo_number} не найден в БД — сначала upsert")
+
+            conn.execute(
+                """
+                INSERT INTO document_files (
+                    eo_number, file_path, sha256, size_bytes, pages, downloaded_at, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(eo_number) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    sha256 = excluded.sha256,
+                    size_bytes = excluded.size_bytes,
+                    pages = excluded.pages,
+                    downloaded_at = excluded.downloaded_at,
+                    verified_at = excluded.verified_at
+                """,
+                (eo_number, path_str, sha256, size_bytes, pages, now, now),
+            )
+            conn.commit()
+        return FileRecord(
+            eo_number=eo_number,
+            file_path=path_str,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            pages=pages,
+            downloaded_at=now,
+            verified_at=now,
+        )
+
+    def get_file(self, eo_number: str) -> FileRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM document_files WHERE eo_number = ?",
+                (eo_number,),
+            ).fetchone()
+        if not row:
+            return None
+        return FileRecord(
+            eo_number=row["eo_number"],
+            file_path=row["file_path"],
+            sha256=row["sha256"],
+            size_bytes=row["size_bytes"],
+            pages=row["pages"],
+            downloaded_at=row["downloaded_at"],
+            verified_at=row["verified_at"],
+        )
+
+    def get_document_row(self, eo_number: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM documents WHERE eo_number = ?",
+                (eo_number,),
+            ).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            sigs = conn.execute(
+                """
+                SELECT authority_guid, is_main FROM document_signatories
+                WHERE eo_number = ? ORDER BY is_main DESC, authority_guid
+                """,
+                (eo_number,),
+            ).fetchall()
+            data["signatories"] = [
+                {"authority_guid": s["authority_guid"], "is_main": bool(s["is_main"])}
+                for s in sigs
+            ]
+            return data
+
+    def count_documents(self) -> int:
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+
+    def count_files(self) -> int:
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM document_files").fetchone()[0])

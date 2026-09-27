@@ -1,0 +1,119 @@
+"""Тесты DocumentStore и импорта JSON."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import date
+from pathlib import Path
+
+from npa_pipeline.db import DocumentStore
+from npa_pipeline.download import already_downloaded, save_download, verify_pdf
+from npa_pipeline.import_json import import_json_sidecars
+from npa_pipeline.models import DocItem, Query
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "document_joint_247_04.json"
+
+
+def _minimal_pdf() -> bytes:
+    return b"""%PDF-1.1
+1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj
+2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj
+3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>endobj
+xref
+0 4
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+trailer<< /Size 4 /Root 1 0 R >>
+startxref
+190
+%%EOF
+"""
+
+
+def test_upsert_card_joint_signatories(tmp_path: Path):
+    store = DocumentStore(tmp_path / "npa.db")
+    card = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    eo = store.upsert_from_card(card)
+    assert eo == "0001202306010022"
+
+    row = store.get_document_row(eo)
+    assert row is not None
+    assert row["number"] == "247/04"
+    assert row["raw_card_json"]
+    assert len(row["signatories"]) == 2
+    mains = [s for s in row["signatories"] if s["is_main"]]
+    assert len(mains) == 1
+    assert mains[0]["authority_guid"] == "d67a404e-260a-4a5b-b340-d34558da8bd6"
+
+
+def test_upsert_idempotent(tmp_path: Path):
+    store = DocumentStore(tmp_path / "npa.db")
+    card = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    store.upsert_from_card(card)
+    first = store.get_document_row(card["eoNumber"])["first_seen_at"]
+    store.upsert_from_card(card)
+    second = store.get_document_row(card["eoNumber"])
+    assert second["first_seen_at"] == first
+    assert store.count_documents() == 1
+
+
+def test_save_and_already_downloaded(tmp_path: Path):
+    store = DocumentStore(tmp_path / "npa.db")
+    card = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    store.upsert_from_card(card)
+    data = _minimal_pdf()
+    pages = verify_pdf(data, content_length=len(data))
+    doc = DocItem(
+        eo_number=card["eoNumber"],
+        number=card["number"],
+        document_date=date(2023, 4, 25),
+        signatory_ids=["a", "b"],
+        complex_name=card["complexName"],
+    )
+    path = save_download(
+        tmp_path / "dl",
+        data=data,
+        eo_number=card["eoNumber"],
+        document=doc,
+        pages=pages,
+        store=store,
+    )
+    assert path.is_file()
+    assert not path.with_suffix(".json").exists()
+    assert already_downloaded(store, card["eoNumber"]) == path
+    assert store.count_files() == 1
+
+
+def test_import_json_sidecar(tmp_path: Path):
+    store = DocumentStore(tmp_path / "npa.db")
+    out = tmp_path / "downloads"
+    out.mkdir()
+    data = _minimal_pdf()
+    pdf = out / "demo.pdf"
+    pdf.write_bytes(data)
+    meta = {
+        "eoNumber": "0001202306010022",
+        "filename": "demo.pdf",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "pages": 1,
+        "document": {
+            "eo_number": "0001202306010022",
+            "number": "247/04",
+            "document_date": "2023-04-25",
+            "signatory_ids": ["a", "b"],
+            "complex_name": "Приказ от 25.04.2023 № 247/04",
+        },
+    }
+    (out / "demo.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    stats = import_json_sidecars(out, store, delete_json=True)
+    assert stats["imported"] == 1
+    assert stats["deleted"] == 1
+    assert not (out / "demo.json").exists()
+    assert store.get_file("0001202306010022") is not None
+    assert already_downloaded(store, "0001202306010022") == pdf.resolve()

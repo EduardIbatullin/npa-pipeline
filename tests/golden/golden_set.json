@@ -1,0 +1,102 @@
+[
+  {
+    "id": "joint_247_04",
+    "query": {
+      "authority_name": "Федеральное агентство по недропользованию",
+      "number": "247/04",
+      "date": "2023-04-25"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202306010022",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "collision_402_2016",
+    "query": {
+      "authority_guid": "d67a404e-260a-4a5b-b340-d34558da8bd6",
+      "number": "402",
+      "date": "2016-07-19"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001201609130025",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "collision_402_2026",
+    "query": {
+      "authority_guid": "d67a404e-260a-4a5b-b340-d34558da8bd6",
+      "number": "402",
+      "date": "2026-07-20"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202609240005",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "fz_310_2025",
+    "query": {
+      "authority_name": "Президент Российской Федерации",
+      "number": "310-ФЗ",
+      "date": "2025-07-31"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202507310060",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "fz_310_2023",
+    "query": {
+      "authority_name": "Президент Российской Федерации",
+      "number": "310-ФЗ",
+      "date": "2023-07-10"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202307100038",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "by_eo_direct",
+    "query": {
+      "eo_number": "0001202306010022"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202306010022",
+      "match_type": "exact"
+    }
+  },
+  {
+    "id": "out_of_range_old",
+    "query": {
+      "authority_name": "Президент Российской Федерации",
+      "number": "999999-ФЗ",
+      "date": "2010-01-01"
+    },
+    "expect": {
+      "status": "out_of_range"
+    }
+  },
+  {
+    "id": "digits_only_310",
+    "query": {
+      "authority_name": "Президент Российской Федерации",
+      "number": "310",
+      "date": "2025-07-31"
+    },
+    "expect": {
+      "status": "found",
+      "eoNumber": "0001202507310060",
+      "match_type": "digits_only"
+    }
+  }
+]
