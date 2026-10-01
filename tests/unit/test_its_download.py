@@ -97,6 +97,63 @@ def test_fetch_its_downloads_and_verifies(tmp_path: Path):
     assert Path(order.pdf_path).is_file()
 
 
+def test_fetch_its_includes_related_word_file(tmp_path: Path):
+    cache = ItsCache(tmp_path / "its.db")
+    cache.upsert_card(
+        burondt.ItsCard(
+            url_id=1647,
+            designation="ИТС 22.1-2021",
+            title="ИТС 22.1-2021",
+            files=[
+                burondt.ItsCardFile(file_id=2196, caption="ИТС НДТ 22.1-2021", role="document"),
+                burondt.ItsCardFile(
+                    file_id=2500,
+                    caption="Приказ об утверждении ИТС 22.1-2021",
+                    role="order",
+                ),
+            ],
+        )
+    )
+    cache.upsert_card(
+        burondt.ItsCard(
+            url_id=2552,
+            designation="ИТС 22.1-2021 в формате Word",
+            title="ИТС 22.1-2021 в формате Word",
+            files=[
+                burondt.ItsCardFile(file_id=3687, caption="ИТС 22.1-2021", role="document"),
+            ],
+        )
+    )
+    pdf = _minimal_pdf()
+    docx = b"PK\x03\x04" + b"word-content-placeholder"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fid = request.url.params.get("UrlId")
+        if fid == "3687":
+            return httpx.Response(
+                200,
+                content=docx,
+                headers={"Content-Disposition": 'attachment; filename="its.docx"'},
+            )
+        return httpx.Response(
+            200,
+            content=pdf,
+            headers={"Content-Disposition": 'attachment; filename="file.pdf"'},
+        )
+
+    with create_client(base_url=burondt.BURONDT_BASE_URL, transport=httpx.MockTransport(handler)) as client:
+        result = fetch_its(
+            client, designation="ИТС 22_1-2021_", out_dir=tmp_path / "out", cache=cache
+        )
+
+    assert result.status == Status.FOUND
+    roles = {f.role for f in result.files}
+    assert roles == {"document", "document_word", "order"}
+    word = next(f for f in result.files if f.role == "document_word")
+    assert word.pdf_path is not None
+    assert Path(word.pdf_path).suffix.lower() == ".docx"
+
+
 def test_fetch_its_skips_already_downloaded(tmp_path: Path):
     cache = _seeded_cache(tmp_path)
     data = _minimal_pdf()

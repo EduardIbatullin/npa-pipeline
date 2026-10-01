@@ -48,6 +48,7 @@ _FILE_ITEM_RE = re.compile(
 )
 _TAG_RE = re.compile(r"<[^>]+>")
 _ORDER_WORD_RE = re.compile(r"приказ", re.IGNORECASE)
+_CANCEL_WORD_RE = re.compile(r"отмен", re.IGNORECASE)
 _ORDER_NUMBER_RE = re.compile(r"№\s*(\d+)")
 _ORDER_DATE_RE = re.compile(
     r"(\d{1,2}\s+[а-яА-Я]+\s+\d{4}|\d{2}\.\d{2}\.\d{4})"
@@ -85,8 +86,12 @@ def _strip_tags(text: str) -> str:
 
 
 def _classify_role(caption: str) -> str:
-    """'order', если в подписи есть слово «приказ» (регистронезависимо), иначе 'document'."""
-    return "order" if _ORDER_WORD_RE.search(caption) else "document"
+    """Роль файла по подписи карточки: order / cancellation / document."""
+    if _CANCEL_WORD_RE.search(caption):
+        return "cancellation"
+    if _ORDER_WORD_RE.search(caption):
+        return "order"
+    return "document"
 
 
 def extract_order_meta(caption: str) -> tuple[str | None, str | None]:

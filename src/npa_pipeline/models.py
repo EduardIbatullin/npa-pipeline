@@ -119,10 +119,11 @@ class Result:
 class ItsFileResult:
     """Один скачанный/найденный файл карточки ИТС (справочник или приказ)."""
 
-    role: str  # "document" | "order" | "unknown"
+    role: str  # document | document_word | order | cancellation | unknown
     file_id: int
     pdf_path: str | None = None
     pages: int | None = None
+    caption: str | None = None  # подпись с карточки burondt — для UI
     order_number_caption: str | None = None
     order_date_caption: str | None = None
 
@@ -132,6 +133,7 @@ class ItsFileResult:
             "file_id": self.file_id,
             "pdf_path": self.pdf_path,
             "pages": self.pages,
+            "caption": self.caption,
             # Явная пометка: подпись карточки не авторитетна (подтверждённая опечатка
             # на реальном примере — карточка «№835», реальный скан «№2326»).
             "order_number_caption": self.order_number_caption,

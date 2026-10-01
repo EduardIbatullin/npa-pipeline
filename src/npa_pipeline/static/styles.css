@@ -283,7 +283,8 @@ label {
 
 input[type="text"],
 input[type="date"],
-input:not([type]) {
+input:not([type]),
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -293,13 +294,20 @@ input:not([type]) {
   color: var(--ink);
 }
 
+textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+  line-height: 1.4;
+}
+
 input.mono,
 .mono {
   font-family: var(--mono);
   font-size: 0.86rem;
 }
 
-input:focus {
+input:focus,
+textarea:focus {
   outline: 2px solid color-mix(in srgb, var(--accent) 35%, white);
   border-color: var(--accent);
 }
@@ -471,6 +479,102 @@ input:focus {
 .links a {
   color: var(--accent);
   font-weight: 500;
+}
+
+.doc-description {
+  margin: 0 0 1rem;
+  white-space: pre-wrap;
+  line-height: 1.45;
+  font-size: 1rem;
+}
+
+.kind-tag {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.file-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.file-label {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.candidate-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.candidate-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-accent);
+}
+
+.candidate-list li span {
+  flex: 1 1 12rem;
+  line-height: 1.35;
+}
+
+.layout-single {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  justify-items: stretch;
+}
+
+.page-check .header-centered {
+  display: block;
+  text-align: center;
+  margin: 0 auto 1.5rem;
+  width: min(720px, 100%);
+}
+
+.page-check .header-centered .lede {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 36rem;
+}
+
+.status-box-block {
+  width: 100%;
+  justify-content: center;
+  border-radius: var(--radius);
+  white-space: normal;
+}
+
+.page-check .page,
+.page.page-check {
+  width: min(760px, calc(100% - 2rem));
+}
+
+.result {
+  min-height: 10rem;
 }
 
 pre.raw {

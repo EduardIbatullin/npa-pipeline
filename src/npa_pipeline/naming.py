@@ -1,4 +1,4 @@
-"""Имена файлов для скачанных PDF."""
+"""Имена файлов и отображаемые названия НПА."""
 
 from __future__ import annotations
 
@@ -9,25 +9,139 @@ from npa_pipeline.models import DocItem
 _WIN_FORBIDDEN = '<>:"/\\|?*'
 _DATE_DOTS = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 _SPACES = re.compile(r"\s+")
+_BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+# Длинные первыми. Формы как в complexName (часто родительный падеж).
+_AUTHORITY_ABBREVS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(re.escape(src), re.IGNORECASE), dst)
+    for src, dst in (
+        (
+            "Министерства природных ресурсов и экологии Российской Федерации",
+            "Минприроды России",
+        ),
+        (
+            "Министерство природных ресурсов и экологии Российской Федерации",
+            "Минприроды России",
+        ),
+        (
+            "Министерства финансов Российской Федерации",
+            "Минфина России",
+        ),
+        (
+            "Министерство финансов Российской Федерации",
+            "Минфин России",
+        ),
+        (
+            "Федерального агентства по недропользованию",
+            "Роснедра",
+        ),
+        (
+            "Федеральное агентство по недропользованию",
+            "Роснедра",
+        ),
+        (
+            "Правительства Российской Федерации",
+            "Правительства РФ",
+        ),
+        (
+            "Правительство Российской Федерации",
+            "Правительство РФ",
+        ),
+        (
+            "Президента Российской Федерации",
+            "Президента РФ",
+        ),
+        (
+            "Президент Российской Федерации",
+            "Президент РФ",
+        ),
+    )
+)
+
+
+def _requisite_line(complex_name: str | None) -> str:
+    """Первая строка complexName без тематического заголовка в кавычках."""
+    raw = (complex_name or "").strip()
+    if not raw:
+        return ""
+    raw = _BR.sub("\n", raw)
+    raw = raw.split("\n", 1)[0].strip()
+    if '"' in raw:
+        raw = raw.split('"', 1)[0].strip()
+    if "«" in raw:
+        raw = raw.split("«", 1)[0].strip()
+    return _SPACES.sub(" ", raw).strip()
+
+
+def abbreviate_authorities(text: str) -> str:
+    """Сокращает типичные органы в тексте (для имён файлов)."""
+    out = text
+    for pat, repl in _AUTHORITY_ABBREVS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def format_document_title(
+    *,
+    name: str | None = None,
+    complex_name: str | None = None,
+    number: str | None = None,
+    document_date: str | None = None,
+) -> str:
+    """Человекочитаемое описание: реквизиты + тема.
+
+    Пример:
+    Приказ Министерства … от 07.04.2026 № 191
+    «Об утверждении…»
+    """
+    head = _requisite_line(complex_name)
+    theme = (name or "").strip()
+    if theme.startswith('"') or theme.startswith("«"):
+        pass
+    elif theme and not theme.startswith("Об ") and not theme.startswith("О "):
+        # name с портала часто уже без кавычек — оставляем как есть
+        pass
+
+    # если name — это весь complexName, не дублируем
+    if theme and head and theme.casefold().startswith(head.casefold()[:40]):
+        theme = ""
+    if not theme and complex_name:
+        # вторая строка / хвост после кавычки
+        rest = _BR.sub("\n", complex_name)
+        parts = rest.split("\n", 1)
+        if len(parts) > 1:
+            theme = parts[1].strip().strip('"«»').strip()
+        elif '"' in rest:
+            theme = rest.split('"', 1)[1].strip().strip('"').strip()
+
+    if head and theme:
+        if not (theme.startswith("«") or theme.startswith('"')):
+            theme_fmt = f"«{theme}»"
+        else:
+            theme_fmt = theme
+        return f"{head}\n{theme_fmt}"
+    if head:
+        return head
+    if theme:
+        return theme
+    if number and document_date:
+        return f"Документ № {number} от {document_date}"
+    return number or ""
 
 
 def human_filename_stem(document: DocItem) -> str:
-    """Строит имя вида «Постановление Правительства РФ от 31_05_2019 N 691».
+    """Строит имя вида «Приказ Минприроды России от 31_05_2019 N 691».
 
-    Берёт первую строку complexName (официальная формулировка с падежами),
-    меняет дату на DD_MM_YYYY и «№» на «N», убирает недопустимые для ФС символы.
+    Берёт первую строку complexName, сокращает органы, дату → DD_MM_YYYY, «№» → «N».
     """
-    raw = (document.complex_name or "").split("\n", 1)[0].strip()
-    if '"' in raw:
-        raw = raw.split('"', 1)[0].strip()
-    if "<br" in raw.lower():
-        raw = re.split(r"<br\s*/?>", raw, flags=re.IGNORECASE)[0].strip()
+    raw = _requisite_line(document.complex_name)
 
     if not raw:
         d = document.document_date.strftime("%d_%m_%Y")
         num = document.number or document.eo_number
         raw = f"Документ от {d} N {num}"
 
+    raw = abbreviate_authorities(raw)
     raw = raw.replace("№", "N").replace("Nº", "N")
     raw = _DATE_DOTS.sub(r"\1_\2_\3", raw)
     raw = _SPACES.sub(" ", raw).strip()
@@ -36,7 +150,6 @@ def human_filename_stem(document: DocItem) -> str:
         raw = raw.replace(ch, "_")
     raw = raw.rstrip(" .")
 
-    # запас на лимит пути Windows
     if len(raw) > 180:
         raw = raw[:180].rstrip(" .")
 

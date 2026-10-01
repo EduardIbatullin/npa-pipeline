@@ -58,6 +58,59 @@ def test_resolve_designation_exact_and_none(tmp_path: Path):
     assert cache.resolve("") == []
 
 
+def test_resolve_strips_thematic_title_after_designation(tmp_path: Path):
+    """Полная строка с темой: «ИТС 51-2025 Литейное…» → как «ИТС 51-2025»."""
+    cache = ItsCache(tmp_path / "its.db")
+    cache.upsert_card(
+        burondt.ItsCard(
+            url_id=2440,
+            designation="ИТС 51-2025",
+            title="Литейное производство изделий из черных металлов",
+            files=[
+                burondt.ItsCardFile(file_id=1, caption="ИТС 51-2025", role="document"),
+            ],
+        )
+    )
+    assert cache.resolve(
+        "ИТС 51-2025 Литейное производство изделий из черных металлов"
+    ) == [2440]
+    assert cache.resolve("ИТС 51-2025") == [2440]
+
+def test_resolve_underscore_and_skips_word_variant(tmp_path: Path):
+    """«22_1-2021_» ≈ «22.1-2021»; карточка Word не должна перебивать PDF."""
+    cache = ItsCache(tmp_path / "its.db")
+    cache.upsert_card(
+        burondt.ItsCard(
+            url_id=1647,
+            designation="ИТС 22.1-2021",
+            title="ИТС НДТ 22.1-2021",
+            files=[
+                burondt.ItsCardFile(file_id=2196, caption="ИТС НДТ 22.1-2021", role="document"),
+                burondt.ItsCardFile(
+                    file_id=2500,
+                    caption="Приказ 2 декабря 2021 г. № 2690 об утверждении ИТС 22.1-2021",
+                    role="order",
+                ),
+            ],
+        )
+    )
+    cache.upsert_card(
+        burondt.ItsCard(
+            url_id=2552,
+            designation="ИТС 22.1-2021 в формате Word",
+            title="ИТС 22.1-2021 в формате Word",
+            files=[
+                burondt.ItsCardFile(file_id=3687, caption="ИТС 22.1-2021", role="document"),
+            ],
+        )
+    )
+
+    assert cache.resolve("ИТС 22_1-2021_") == [1647]
+    assert cache.resolve("ИТС 22.1-2021") == [1647]
+    assert cache.find_related_url_ids(1647) == [2552]
+    assert cache.find_related_url_ids(2552) == [1647]
+
+
 def test_resolve_finds_via_order_caption_when_designation_lacks_year(tmp_path: Path):
     # Реальный случай (UrlId=1150, burondt.ru): «Обозначение» карточки — «ИТС НДТ 47»,
     # без года; год есть только в подписи файла-приказа.

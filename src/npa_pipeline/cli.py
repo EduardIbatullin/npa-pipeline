@@ -15,12 +15,17 @@ from npa_pipeline.import_json import import_json_sidecars
 from npa_pipeline.its import ItsCache
 from npa_pipeline.its_download import fetch_its
 from npa_pipeline.models import Query, parse_user_date
+from npa_pipeline.parse_citation import parse_citation
 from npa_pipeline.service import fetch_document
 
 
 def _query_from_args(args: argparse.Namespace) -> Query:
+    if getattr(args, "title", None):
+        return parse_citation(args.title).to_query()
     if args.json:
         data = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        if data.get("title") or data.get("citation"):
+            return parse_citation(data.get("title") or data["citation"]).to_query()
         date_val = data.get("date")
         return Query(
             eo_number=data.get("eo_number") or data.get("eoNumber"),
@@ -41,7 +46,11 @@ def _query_from_args(args: argparse.Namespace) -> Query:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    query = _query_from_args(args)
+    try:
+        query = _query_from_args(args)
+    except ValueError as exc:
+        print(json.dumps({"status": "invalid_input", "message": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
     result = fetch_document(
         query,
         cache_path=args.db,
@@ -108,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     fetch = sub.add_parser("fetch", help="Найти и скачать документ")
+    fetch.add_argument(
+        "--title",
+        help=(
+            "Полное официальное название (complexName), например: "
+            "«Федеральный закон от 21.07.2014 № 219-ФЗ \"О внесении…\"» — "
+            "орган/номер/дата извлекаются автоматически"
+        ),
+    )
     fetch.add_argument("--eo", help="Известный eoNumber")
     fetch.add_argument("--authority", help="Название органа")
     fetch.add_argument("--authority-guid", help="GUID органа")

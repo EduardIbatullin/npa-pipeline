@@ -29,9 +29,61 @@ _BARE_NUMBER_QUERY_RE = re.compile(r"^итс(?:ндт)?(\d+)$")
 _YEAR_SUFFIX_RE = re.compile(r"-(\d{4})$")
 _YEAR_IN_TEXT_RE = re.compile(r"(\d{4})")
 
+# «ИТС 51-2025» / «ИТС НДТ 28-2021» / «ИТС 22.1-2021» — даже если после идёт тема.
+_DESIGNATION_IN_TEXT_RE = re.compile(
+    r"(?iu)\bитс(?:\s*ндт)?\s*\d+(?:[._]\d+)?(?:\s*[-–—]\s*\d{4})?"
+)
+
+
+def extract_its_designation(text: str) -> str:
+    """Достаёт обозначение из строки вида «ИТС 51-2025 Литейное производство…».
+
+    Если явного паттерна нет — возвращает исходный текст (год / «ИТС 53»).
+    """
+    if not text or not text.strip():
+        return ""
+    m = _DESIGNATION_IN_TEXT_RE.search(text)
+    if m:
+        return m.group(0)
+    return text.strip()
+
 
 def _designation_norm(designation: str) -> str:
-    return normalize_number(designation).casefold()
+    """Нормализация обозначения для сравнения/поиска.
+
+    Подчёркивания → точки (часто в именах файлов: «22_1-2021» ≈ «22.1-2021»),
+    хвостовые «._-» срезаем — иначе «ИТС 22.1-2021_» не совпадает с карточкой.
+    """
+    text = normalize_number(designation).casefold().replace("_", ".")
+    return text.strip("._-")
+
+
+def _like_pattern(needle: str) -> str:
+    """Подстрока для SQL LIKE с экранированием % и _ (иначе _ = любой символ)."""
+    escaped = (
+        needle.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
+
+
+def _is_word_variant(designation: str | None) -> bool:
+    """Карточки «… в формате Word» — отдельный url_id с .docx, не PDF."""
+    if not designation:
+        return False
+    n = designation.casefold()
+    return "word" in n or "в формате" in n
+
+
+def _canonical_its_key(designation: str) -> str:
+    """Ключ «одна и та же ИТС»: без суффикса «в формате Word»."""
+    n = _designation_norm(designation)
+    for suffix in ("вформатеword", "форматеword", "word"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)]
+            break
+    return n.strip("._-")
 
 
 def _base_number(designation_norm: str) -> str | None:
@@ -264,6 +316,8 @@ class ItsCache:
         """
         if not designation or not designation.strip():
             return []
+        # Сначала вытащить «ИТС NN-YYYY» из полной строки с названием темы.
+        designation = extract_its_designation(designation)
         needle = _designation_norm(designation)
         if needle.isdigit() and len(needle) == 4:
             return self.resolve_by_year(needle)
@@ -276,20 +330,33 @@ class ItsCache:
                 (needle,),
             ).fetchall()
             if exact:
-                return [r["url_id"] for r in exact]
-            like = f"%{needle}%"
+                return self._prefer_pdf_variants([r["url_id"] for r in exact])
             partial = conn.execute(
-                "SELECT url_id FROM its_documents WHERE designation_norm LIKE ?",
-                (like,),
+                "SELECT url_id FROM its_documents WHERE designation_norm LIKE ? ESCAPE '\\'",
+                (_like_pattern(needle),),
             ).fetchall()
             if partial:
-                return [r["url_id"] for r in partial]
+                return self._prefer_pdf_variants([r["url_id"] for r in partial])
 
             rows = conn.execute(
                 "SELECT DISTINCT url_id, caption FROM its_files WHERE role = 'order' AND caption IS NOT NULL"
             ).fetchall()
             via_order = {r["url_id"] for r in rows if needle in _designation_norm(r["caption"])}
-            return sorted(via_order)
+            return self._prefer_pdf_variants(sorted(via_order))
+
+    def _prefer_pdf_variants(self, url_ids: list[int]) -> list[int]:
+        """Убирает «в формате Word», если есть обычная PDF-карточка."""
+        if len(url_ids) <= 1:
+            return url_ids
+        with self._connect() as conn:
+            placeholders = ",".join("?" * len(url_ids))
+            rows = conn.execute(
+                f"SELECT url_id, designation FROM its_documents WHERE url_id IN ({placeholders})",
+                url_ids,
+            ).fetchall()
+        by_id = {r["url_id"]: r["designation"] for r in rows}
+        non_word = [u for u in url_ids if not _is_word_variant(by_id.get(u))]
+        return non_word if non_word else list(url_ids)
 
     def resolve_by_year(self, year: str) -> list[int]:
         """Все url_id ИТС за указанный год (4 цифры) — может быть несколько версий сразу.
@@ -313,7 +380,7 @@ class ItsCache:
                 (f"%{year}%",),
             ).fetchall()
             ids = {r["url_id"] for r in by_designation} | {r["url_id"] for r in by_order_date}
-            return sorted(ids)
+            return self._prefer_pdf_variants(sorted(ids))
 
     def resolve_by_number(self, number: str) -> list[int]:
         """Все версии ИТС с указанным базовым номером (без года), новые версии — первыми.
@@ -325,13 +392,17 @@ class ItsCache:
         списка, а не мешаются между известными.
         """
         with self._connect() as conn:
-            docs = conn.execute("SELECT url_id, designation_norm FROM its_documents").fetchall()
+            docs = conn.execute(
+                "SELECT url_id, designation, designation_norm FROM its_documents"
+            ).fetchall()
             matches = [r for r in docs if _base_number(r["designation_norm"]) == number]
             if not matches:
                 return []
 
             dated: list[tuple[int, str | None]] = []
             for row in matches:
+                if _is_word_variant(row["designation"]):
+                    continue
                 order_dates = [
                     f["order_date_caption"]
                     for f in conn.execute(
@@ -341,6 +412,18 @@ class ItsCache:
                 ]
                 year = _extract_year(row["designation_norm"], order_dates)
                 dated.append((row["url_id"], year))
+            # если отфильтровали все Word и ничего не осталось — вернём Word как есть
+            if not dated:
+                for row in matches:
+                    order_dates = [
+                        f["order_date_caption"]
+                        for f in conn.execute(
+                            "SELECT order_date_caption FROM its_files WHERE url_id = ? AND role = 'order'",
+                            (row["url_id"],),
+                        ).fetchall()
+                    ]
+                    year = _extract_year(row["designation_norm"], order_dates)
+                    dated.append((row["url_id"], year))
 
         def sort_key(item: tuple[int, str | None]) -> tuple[int, int, int]:
             url_id, year = item
@@ -359,6 +442,25 @@ class ItsCache:
             if not row:
                 return None
             return dict(row)
+
+    def find_related_url_ids(self, url_id: int) -> list[int]:
+        """Тот же ИТС в другом формате (PDF ↔ Word) — другие url_id с тем же ключом."""
+        card = self.get_card(url_id)
+        if card is None:
+            return []
+        key = _canonical_its_key(card["designation"])
+        if not key:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT url_id, designation FROM its_documents"
+            ).fetchall()
+        related = [
+            r["url_id"]
+            for r in rows
+            if r["url_id"] != url_id and _canonical_its_key(r["designation"]) == key
+        ]
+        return sorted(related)
 
     def list_files(self, url_id: int) -> list[dict[str, Any]]:
         with self._connect() as conn:

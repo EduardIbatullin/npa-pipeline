@@ -26,6 +26,11 @@ def verify_pdf(data: bytes, *, content_length: int | None) -> int:
             f"Размер {len(data)} не совпадает с Content-Length {content_length}"
         )
     if not data.startswith(b"%PDF"):
+        if data.startswith(b"PK"):
+            raise IntegrityError(
+                "Файл не PDF (похоже на Word/ZIP). На burondt.ru бывает отдельная "
+                "карточка «в формате Word» — ищите обычное обозначение без Word"
+            )
         raise IntegrityError("Нет сигнатуры %PDF в начале файла")
     tail = data[-1024:] if len(data) >= 1024 else data
     if b"%%EOF" not in tail:
