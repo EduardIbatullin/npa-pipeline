@@ -19,8 +19,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# PyTorch CPU-сборка (иначе pip тянет CUDA-колёса в несколько гигабайт)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# PyTorch CPU-сборка (иначе pip тянет CUDA-колёса в несколько гигабайт).
+# torch и torchvision ставятся одной командой из одного индекса: torchvision из PyPI
+# не совместим с CPU-сборкой torch (ошибка "operator torchvision::nms does not exist")
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # Зависимости отдельно — слой кэшируется при неизменном pyproject.toml
 COPY pyproject.toml README.md ./
