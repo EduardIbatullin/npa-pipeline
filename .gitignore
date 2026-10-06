@@ -24,3 +24,10 @@ downloads/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Рабочие папки прогонов OCR
+run*/
+run*.log
+run*.progress.log
+smoke/
+*.bak_*

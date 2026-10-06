@@ -42,6 +42,95 @@ function fileActions(file) {
   `;
 }
 
+let activeOcrJob = null;
+let ocrTimer = null;
+
+function fmtElapsed(sec) {
+  const m = Math.floor(sec / 60);
+  const s = String(sec % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function ocrStatusHtml(job) {
+  const id = esc(job.job_id);
+  if (job.status === "running") {
+    const pct = job.percent == null ? "—" : `${job.percent.toFixed(1)}%`;
+    const page = job.page != null ? `страница ${esc(job.page)} из ${esc(job.total_pages)}` : "подготовка";
+    const steps = (job.steps || []).map((x) => `<li>${esc(x)}</li>`).join("");
+    return `
+      <p class="ocr-line">Распознаётся: ${page} · ${esc(pct)} · прошло ${esc(fmtElapsed(job.elapsed_seconds))}</p>
+      ${steps ? `<ul class="ocr-steps">${steps}</ul>` : ""}
+      <button type="button" class="btn" data-ocr-cancel="${id}">Остановить</button>`;
+  }
+  if (job.status === "done") {
+    return `
+      <p class="ocr-line">Готово за ${esc(fmtElapsed(job.elapsed_seconds))}.</p>
+      <a class="btn primary" href="/api/ocr/jobs/${id}/docx" download>Скачать DOCX</a>`;
+  }
+  if (job.status === "cancelled") {
+    return `<p class="ocr-line">Остановлено. Повторный запуск продолжит с сохранённых страниц.</p>`;
+  }
+  return `<p class="ocr-line">Ошибка: ${esc(job.error || "распознавание не завершено")}</p>`;
+}
+
+function renderOcrStatus(job) {
+  const el = $("#ocr-status");
+  if (el) el.innerHTML = ocrStatusHtml(job);
+}
+
+async function pollOcr() {
+  clearTimeout(ocrTimer);
+  if (!activeOcrJob) return;
+  try {
+    const res = await fetch(`/api/ocr/jobs/${encodeURIComponent(activeOcrJob)}`);
+    const job = await res.json();
+    if (!res.ok) {
+      activeOcrJob = null;
+      const el = $("#ocr-status");
+      if (el) el.textContent = typeof job.detail === "string" ? job.detail : "Задание не найдено";
+      return;
+    }
+    renderOcrStatus(job);
+    if (job.status === "running") {
+      ocrTimer = setTimeout(pollOcr, 5000);
+    } else {
+      activeOcrJob = null;
+    }
+  } catch (err) {
+    ocrTimer = setTimeout(pollOcr, 5000);
+  }
+}
+
+async function startOcr(eoNumber, authorityName) {
+  const el = $("#ocr-status");
+  if (el) el.textContent = "Запуск…";
+  try {
+    const res = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eo_number: eoNumber, authority_name: authorityName || null }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (el) el.textContent = typeof data.detail === "string" ? data.detail : "Ошибка запуска";
+      return;
+    }
+    activeOcrJob = data.job_id;
+    renderOcrStatus(data);
+    pollOcr();
+  } catch (err) {
+    if (el) el.textContent = String(err);
+  }
+}
+
+async function cancelOcr(jobId) {
+  try {
+    await fetch(`/api/ocr/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  } finally {
+    pollOcr();
+  }
+}
+
 function renderResult(data) {
   const root = $("#result");
   if (!data) {
@@ -70,6 +159,16 @@ function renderResult(data) {
     body += `<div class="file-actions">${data.files.map(fileActions).join("")}</div>`;
   }
 
+  if (data.ocr?.scan_pages) {
+    body += `
+      <div class="ocr-box">
+        <p class="hint">Страниц без текстового слоя: ${esc(data.ocr.scan_pages)} из ${esc(data.ocr.total_pages)}</p>
+        <button type="button" class="btn primary" id="btn-ocr"
+          data-eo="${esc(data.ocr.eo_number)}" data-authority="${esc(data.ocr.authority_name || "")}">Распознать скан</button>
+        <div id="ocr-status" class="ocr-status"></div>
+      </div>`;
+  }
+
   if (data.candidates?.length) {
     body += `<p class="hint">Найдено несколько вариантов — выберите нужный:</p><ul class="candidate-list">`;
     for (const c of data.candidates) {
@@ -94,6 +193,7 @@ function renderResult(data) {
 
   root.className = "result";
   root.innerHTML = body;
+  if (activeOcrJob) pollOcr();
 }
 
 async function lookup(payload) {
@@ -133,6 +233,16 @@ $("#lookup-form").addEventListener("submit", (e) => {
 });
 
 $("#result").addEventListener("click", (e) => {
+  const ocrBtn = e.target.closest("#btn-ocr");
+  if (ocrBtn) {
+    startOcr(ocrBtn.dataset.eo, ocrBtn.dataset.authority);
+    return;
+  }
+  const cancelBtn = e.target.closest("button[data-ocr-cancel]");
+  if (cancelBtn) {
+    cancelOcr(cancelBtn.dataset.ocrCancel);
+    return;
+  }
   const btn = e.target.closest("button[data-url-id]");
   if (!btn) return;
   const urlId = Number(btn.dataset.urlId);
