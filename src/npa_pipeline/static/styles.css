@@ -597,3 +597,9 @@ pre.raw {
     flex-direction: column;
   }
 }
+
+/* Распознавание скана (этап 3) */
+.ocr-box { margin-top: 14px; }
+.ocr-status { margin-top: 10px; }
+.ocr-line { margin: 6px 0; }
+.ocr-steps { margin: 4px 0 10px; padding-left: 18px; font-size: 14px; }

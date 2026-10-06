@@ -14,6 +14,7 @@ from npa_pipeline import burondt
 from npa_pipeline.authorities import AuthorityCache
 from npa_pipeline.db import DEFAULT_DB_PATH, DocumentStore
 from npa_pipeline.download import find_pdf_by_eo
+from npa_pipeline.ocr_jobs import JobBusyError, OcrJobManager, count_scan_pages
 from npa_pipeline.http_client import create_client
 from npa_pipeline.its import ItsCache
 from npa_pipeline.its_download import fetch_its, fetch_its_by_url_id
@@ -35,6 +36,7 @@ _YEAR_ONLY = re.compile(r"^\s*\d{4}\s*$")
 
 app = FastAPI(title="NPA Pipeline", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+ocr_jobs = OcrJobManager(DEFAULT_OUT)
 
 
 class FetchRequest(BaseModel):
@@ -55,6 +57,11 @@ class FetchItsRequest(BaseModel):
     designation: str | None = None
     url_id: int | None = None
     download: bool = True
+
+
+class OcrStartRequest(BaseModel):
+    eo_number: str
+    authority_name: str | None = None  # из ответа поиска (ocr.authority_name)
 
 
 class LookupRequest(BaseModel):
@@ -183,6 +190,30 @@ def _lookup_its(*, designation: str | None = None, url_id: int | None = None) ->
     }
 
 
+def _authority_from_title(title: str | None) -> str | None:
+    """Орган-подписант по названию акта — только для тех, где восстановление должности поддержано."""
+    if not title:
+        return None
+    if title.startswith("Постановление Правительства"):
+        return "Правительство Российской Федерации"
+    if title.startswith("Указ Президента"):
+        return "Президент Российской Федерации"
+    return None
+
+
+def _ocr_info(pdf_path: str | None, eo_number: str | None, title: str | None) -> dict | None:
+    """Есть ли у PDF страницы-сканы и можно ли запустить распознавание."""
+    if not pdf_path or not eo_number:
+        return None
+    total, scan = count_scan_pages(pdf_path)
+    return {
+        "eo_number": eo_number,
+        "total_pages": total,
+        "scan_pages": scan,
+        "authority_name": _authority_from_title(title),
+    }
+
+
 def _lookup_npa(q: str) -> dict:
     try:
         parsed = parse_citation(q)
@@ -217,8 +248,20 @@ def _lookup_npa(q: str) -> dict:
         )
         payload["pdf_url"] = f"/api/pdf/{result.eo_number}"
 
+    ocr = _ocr_info(
+        result.pdf_path,
+        result.eo_number,
+        format_document_title(
+            name=doc.get("name"),
+            complex_name=doc.get("complex_name"),
+            number=doc.get("number") or parsed.number,
+            document_date=doc.get("document_date") or parsed.date.isoformat(),
+        ),
+    )
+
     return {
         "kind": "npa",
+        "ocr": ocr,
         "status": payload["status"],
         "title": f"№ {parsed.number} от {parsed.date.isoformat()}" if parsed else None,
         "description": description,
@@ -462,6 +505,50 @@ def api_fetch_its(body: FetchItsRequest) -> dict:
         if f.get("pdf_path"):
             f["pdf_url"] = f"/api/its/pdf/{f['file_id']}"
     return payload
+
+
+@app.post("/api/ocr")
+def api_ocr_start(body: OcrStartRequest) -> dict:
+    pdf = find_pdf_by_eo(_store(), body.eo_number.strip())
+    if pdf is None:
+        raise HTTPException(status_code=404, detail="PDF не найден на диске. Сначала найдите документ.")
+    try:
+        job = ocr_jobs.start(pdf, authority_name=(body.authority_name or None))
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return job.to_dict()
+
+
+def _job_or_404(job_id: str):
+    job = ocr_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено (возможно, сервер перезапускался)")
+    return job
+
+
+@app.get("/api/ocr/jobs/{job_id}")
+def api_ocr_status(job_id: str) -> dict:
+    return _job_or_404(job_id).to_dict()
+
+
+@app.post("/api/ocr/jobs/{job_id}/cancel")
+def api_ocr_cancel(job_id: str) -> dict:
+    job = _job_or_404(job_id)
+    ocr_jobs.cancel(job)
+    return job.to_dict()
+
+
+@app.get("/api/ocr/jobs/{job_id}/docx")
+def api_ocr_docx(job_id: str) -> FileResponse:
+    job = _job_or_404(job_id)
+    if job.status != "done" or not job.docx_path.is_file():
+        raise HTTPException(status_code=404, detail="Распознавание ещё не завершено")
+    return FileResponse(
+        job.docx_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=job.docx_path.name,
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/api/its/pdf/{file_id}")
