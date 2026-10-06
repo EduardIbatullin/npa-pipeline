@@ -31,3 +31,4 @@ run*.log
 run*.progress.log
 smoke/
 *.bak_*
+cache/
