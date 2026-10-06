@@ -899,3 +899,21 @@ def test_ocr_document_writes_timings_per_document_and_per_page(tmp_path: Path):
         assert [s["step"] for s in page["steps"]][0] == "проверка сохранённого результата"
         assert page["total_seconds"] >= 0
     assert timings["total_seconds"] >= sum(s["seconds"] for s in timings["document_steps"])
+
+
+def test_lazy_engine_loads_once_and_reloads_after_release():
+    from npa_pipeline.ocr import _LazyEngine
+
+    created = []
+
+    def factory():
+        created.append(1)
+        return lambda x: x * 2
+
+    engine = _LazyEngine(factory)
+    assert engine(3) == 6
+    assert engine(4) == 8
+    assert len(created) == 1
+    engine.release()
+    assert engine(1) == 2
+    assert len(created) == 2

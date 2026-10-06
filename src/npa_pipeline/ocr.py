@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import difflib
+import gc
 import json
 import os
 import re
@@ -473,6 +474,25 @@ def paddle_table_regions(page: Image.Image, predict_fn: Callable[[Path], dict]) 
     return _merge_overlapping_regions(boxes)
 
 
+class _LazyEngine:
+    """Тяжёлый движок: создаётся при первом вызове и выгружается по release().
+    PPStructureV3 и PaddleOCR для ячеек вместе не помещаются в память (контейнер 12 ГБ
+    падал по OOM при их одновременной загрузке), поэтому они работают по очереди."""
+
+    def __init__(self, factory: Callable[[], Callable]) -> None:
+        self._factory = factory
+        self._engine: Callable | None = None
+
+    def __call__(self, *args):
+        if self._engine is None:
+            self._engine = self._factory()
+        return self._engine(*args)
+
+    def release(self) -> None:
+        self._engine = None
+        gc.collect()
+
+
 def run_tatr_tables(
     image_path: Path,
     text_predict_fn: Callable[[Path], dict],
@@ -480,17 +500,23 @@ def run_tatr_tables(
     cell_text_fn: Callable[[Path], str] | None = None,
     region_fn: Callable[[Image.Image], list[Box]] | None = None,
     structure_fn: Callable[[Image.Image], TableStructure] | None = None,
+    release_structure: Callable[[], None] | None = None,
+    release_cells: Callable[[], None] | None = None,
 ) -> list[TableBlock]:
     """Таблицы страницы: регионы и структура (строки/столбцы/объединения) — TATR;
     текст ячеек — PaddleOCR по вырезанной таблице (text_predict_fn). Каждая таблица
     вырезается с отступом, структура и текст считаются по одному и тому же кропу.
-    Столбцы и строки без текста удаляются как артефакты детекции."""
+    Столбцы и строки без текста удаляются как артефакты детекции.
+
+    Порядок по этапам: сначала все регионы и текст кропов (text_predict_fn) и структура,
+    затем release_structure() — выгрузка PPStructureV3, потом текст ячеек (cell_text_fn)
+    и release_cells(). Так тяжёлые движки не находятся в памяти одновременно."""
     structure_fn = structure_fn or table_structure.detect_structure
 
-    blocks: list[TableBlock] = []
     with Image.open(image_path) as opened:
         page = opened.convert("RGB")
     regions = region_fn(page) if region_fn is not None else table_structure.detect_table_regions(page)
+    pending: list[tuple] = []
     for x1, y1, x2, y2 in regions:
         crop_box = (
             max(0, int(x1) - _TABLE_CROP_PADDING),
@@ -515,6 +541,13 @@ def run_tatr_tables(
         structure, dropped_cols = table_structure.drop_empty_columns(structure, texts)
         structure = table_structure.expand_rows_to_text(structure, texts)
         structure = table_structure.drop_empty_rows(structure, texts)
+        pending.append((crop_box, (x1, y1, x2, y2), crop, texts, structure, dropped_cols))
+
+    if release_structure is not None:
+        release_structure()
+
+    blocks: list[TableBlock] = []
+    for crop_box, (x1, y1, x2, y2), crop, texts, structure, dropped_cols in pending:
         low_cells: dict[tuple[int, int], tuple[bool, ...]] = {}
         if cell_text_fn is not None:
             texts, low_cells = _recognize_cells(crop, structure, texts, cell_text_fn)
@@ -541,6 +574,8 @@ def run_tatr_tables(
                 dropped_columns=dropped_cols,
             )
         )
+    if release_cells is not None:
+        release_cells()
     return blocks
 
 
@@ -1124,8 +1159,8 @@ def ocr_document(
         pages_dir.mkdir(parents=True, exist_ok=True)
         pages: list[PageResult] = []
 
-    text_predict_fn: Callable[[Path], dict] | None = None
-    cell_text_fn: Callable[[Path], str] | None = None
+    text_predict_fn: Callable | None = None
+    cell_text_fn: Callable | None = None
     with tempfile.TemporaryDirectory() as tmp_dir:
         for i, (pdf_page, fitz_page) in enumerate(zip(reader.pages, fitz_doc)):
             page_number = i + 1
@@ -1152,10 +1187,11 @@ def ocr_document(
             use_tatr = table_engine == "tatr" and predict_tables_fn is None
             with timer.step(page_number, "загрузка моделей"):
                 if use_tatr and text_predict_fn is None:
-                    # TATR грузим ДО PaddleOCR: torch должен импортироваться раньше paddle на Windows
+                    # TATR грузим ДО PaddleOCR: torch должен импортироваться раньше paddle на Windows.
+                    # PaddleOCR-движки создаются лениво и работают по очереди (см. _LazyEngine)
                     table_structure.load_tatr()
-                    text_predict_fn = _default_predict_tables_fn()
-                    cell_text_fn = _default_cell_text_fn()
+                    text_predict_fn = _LazyEngine(_default_predict_tables_fn)
+                    cell_text_fn = _LazyEngine(_default_cell_text_fn)
                 if predict_tables_fn is None and not use_tatr:
                     predict_tables_fn = _default_predict_tables_fn()
                 if image_data_fn is None:
@@ -1182,6 +1218,8 @@ def ocr_document(
                         text_predict_fn,
                         cell_text_fn=cell_text_fn,
                         region_fn=timed_regions,
+                        release_structure=text_predict_fn.release,
+                        release_cells=cell_text_fn.release,
                     )
                     elapsed = time.perf_counter() - t0
                     timer.add(_page, "таблицы: поиск областей", regions_seconds[0])
